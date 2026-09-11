@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Homelab Dashboard</title>
+<script>
+  // Resolve the theme before first paint to avoid a flash of the wrong theme.
+  (function () {
+    try {
+      var stored = localStorage.getItem("theme");
+      var theme = stored === "light" || stored === "dark"
+        ? stored
+        : (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", theme);
+    } catch (e) {
+      document.documentElement.setAttribute("data-theme", "light");
+    }
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+  }
+
+  :root {
+    --bg: #F7F6F2;
+    --text: #1E2320;
+    --link: #4A5CE8;
+    --link-hover: #3547CC;
+
+    --sidebar-bg: #FCFBF8;
+    --sidebar-border: #E9E7DF;
+
+    --clock-time: #1E2320;
+    --clock-date: #9A9587;
+    --label-color: #9A9587;
+
+    --server-icon-bg: #F0EEE7;
+    --server-icon-color: #57534A;
+    --server-name-color: #1E2320;
+    --server-sub-color: #9A9587;
+    --load-val-color: #57534A;
+    --load-label-color: #B2AC9C;
+
+    --disk-track-bg: #EDEBE3;
+    --disk-fill-bg: #4A5CE8;
+    --disk-meta-color: #746F63;
+
+    --toggle-bg: #EDEBE3;
+    --toggle-border: #E0DDD2;
+    --toggle-knob-bg: #1E2320;
+    --toggle-knob-color: #F7F6F2;
+    --toggle-icon-color: #B2AC9C;
+
+    --hero-text-color: #302D26;
+
+    --settings-bg: #FCFBF8;
+    --settings-border: #E9E7DF;
+    --settings-color: #746F63;
+
+    --section-border: #E9E7DF;
+    --section-title-color: #1E2320;
+    --section-count-color: #9A9587;
+
+    --tile-bg: #FCFBF8;
+    --tile-border: #E9E7DF;
+    --tile-label-color: #302D26;
+
+    --status-green: #4CAF7D;
+    --status-amber: #E3A63E;
+    --status-red: #C4503A;
+    --status-gray: #ADA8A0;
+
+    --empty-color: #9A9587;
+  }
+
+  html[data-theme="dark"] {
+    --bg: #12151B;
+    --text: #E7E9EC;
+    --link: #8C97FF;
+    --link-hover: #AAB3FF;
+
+    --sidebar-bg: #171B22;
+    --sidebar-border: #262B33;
+
+    --clock-time: #F2F3F5;
+    --clock-date: #8B93A1;
+    --label-color: #6B7280;
+
+    --server-icon-bg: #20252D;
+    --server-icon-color: #AEB4BF;
+    --server-name-color: #E7E9EC;
+    --server-sub-color: #6B7280;
+    --load-val-color: #AEB4BF;
+    --load-label-color: #545C68;
+
+    --disk-track-bg: #20252D;
+    --disk-fill-bg: #8C97FF;
+    --disk-meta-color: #8B93A1;
+
+    --toggle-bg: #20252D;
+    --toggle-border: #2A303A;
+    --toggle-knob-bg: #E7E9EC;
+    --toggle-knob-color: #12151B;
+    --toggle-icon-color: #545C68;
+
+    --hero-text-color: #D6D9DE;
+
+    --settings-bg: #171B22;
+    --settings-border: #262B33;
+    --settings-color: #8B93A1;
+
+    --section-border: #262B33;
+    --section-title-color: #F2F3F5;
+    --section-count-color: #6B7280;
+
+    --tile-bg: #171B22;
+    --tile-border: #262B33;
+    --tile-label-color: #E7E9EC;
+
+    --status-green: #4ADE80;
+    --status-amber: #FBBF24;
+    --status-red: #F87171;
+    --status-gray: #6B7280;
+
+    --empty-color: #6B7280;
+  }
+
+  body {
+    font-family: 'Manrope', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    color: var(--text);
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { color: var(--link-hover); }
+
+  /* Hides the scrollbar on an internally-scrolling element while keeping
+     it scrollable (wheel, touch, keyboard) - used by both the sidebar and
+     .main below, since each scrolls independently of the other now. */
+  .no-scrollbar {
+    scrollbar-width: none;       /* Firefox */
+    -ms-overflow-style: none;    /* old Edge/IE */
+  }
+  .no-scrollbar::-webkit-scrollbar { display: none; }  /* Chrome/Safari/Edge */
+
+  .sidebar {
+    width: 292px;
+    flex-shrink: 0;
+    background: var(--sidebar-bg);
+    border-right: 1px solid var(--sidebar-border);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 36px 24px;
+    height: 100vh;
+    overflow-y: auto;
+  }
+  .sidebar-clock { margin-bottom: 36px; text-align: center; }
+  .sidebar-clock-time { font-size: 33px; font-weight: 800; letter-spacing: -0.02em; line-height: 1; color: var(--clock-time); }
+  .sidebar-clock-date { font-size: 12.5px; color: var(--clock-date); margin-top: 7px; font-weight: 500; }
+
+  .sidebar-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--label-color);
+    margin-bottom: 16px;
+  }
+  .server-list { display: flex; flex-direction: column; gap: 4px; }
+  .server-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 10px;
+    border-radius: 10px;
+  }
+  .server-icon {
+    width: 34px; height: 34px; border-radius: 8px;
+    background: var(--server-icon-bg);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--server-icon-color);
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .server-meta { flex: 1; min-width: 0; }
+  .server-name { font-size: 13.5px; font-weight: 600; color: var(--server-name-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .server-sub { font-size: 11px; color: var(--server-sub-color); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .server-load { display: flex; gap: 12px; margin-top: 5px; }
+  .server-load-item { display: flex; flex-direction: column; align-items: flex-start; }
+  .server-load-val { font-size: 13px; font-weight: 700; color: var(--load-val-color); line-height: 1; }
+  .server-load-label { font-size: 9.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--load-label-color); margin-top: 3px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 6px; }
+
+  .sidebar-footer { display: flex; flex-direction: column; gap: 22px; }
+
+  .disk-gauge { display: flex; flex-direction: column; gap: 9px; }
+  .disk-gauge[hidden] { display: none; }
+  .disk-gauge-label {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--label-color);
+  }
+  .disk-gauge-track { width: 100%; height: 8px; border-radius: 999px; background: var(--disk-track-bg); overflow: hidden; }
+  .disk-gauge-fill { height: 100%; border-radius: 999px; background: var(--disk-fill-bg); transition: width 0.4s ease; }
+  .disk-gauge-meta { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--disk-meta-color); font-weight: 600; }
+
+  .sidebar-bottom { display: flex; align-items: center; gap: 10px; }
+  .settings-entry {
+    width: 36px; height: 36px; border-radius: 10px;
+    background: var(--settings-bg);
+    border: 1px solid var(--settings-border);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--settings-color);
+    flex-shrink: 0;
+  }
+  .theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    width: 60px;
+    height: 32px;
+    border-radius: 999px;
+    background: var(--toggle-bg);
+    border: 1px solid var(--toggle-border);
+    padding: 3px;
+    position: relative;
+    cursor: pointer;
+  }
+  .theme-toggle .knob {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: var(--toggle-knob-bg);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--toggle-knob-color);
+    transform: translateX(0px);
+    transition: transform 0.2s ease;
+  }
+  html[data-theme="dark"] .theme-toggle .knob { transform: translateX(28px); }
+  .theme-toggle .track-icon { position: absolute; top: 8px; color: var(--toggle-icon-color); }
+  .theme-toggle .icon-sun { left: 8px; opacity: 0; }
+  .theme-toggle .icon-moon { right: 8px; opacity: 1; }
+  html[data-theme="dark"] .theme-toggle .icon-sun { opacity: 1; }
+  html[data-theme="dark"] .theme-toggle .icon-moon { opacity: 0; }
+
+  .main {
+    flex: 1;
+    min-width: 0;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 44px 52px;
+    display: flex;
+    flex-direction: column;
+    gap: 36px;
+  }
+  .top-section {
+    display: flex;
+    justify-content: center;
+    padding: 4px 0 10px;
+  }
+  .top-hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    max-width: 620px;
+    text-align: center;
+  }
+  .top-hero-tag {
+    display: flex;
+    align-items: center;
+    font-size: 21px; font-weight: 800; letter-spacing: -0.01em; color: var(--text);
+  }
+  .top-hero-text { font-size: 17px; line-height: 1.55; color: var(--hero-text-color); font-weight: 600; }
+
+  .section { display: flex; flex-direction: column; gap: 16px; }
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--section-border);
+  }
+  .section-title { font-size: 15px; font-weight: 700; color: var(--section-title-color); }
+  .section-count { font-size: 12.5px; color: var(--section-count-color); font-weight: 600; }
+
+  .tile-grid { display: flex; flex-wrap: wrap; gap: 16px; }
+  .tile {
+    width: 132px;
+    height: 116px;
+    border-radius: 16px;
+    background: var(--tile-bg);
+    border: 1px solid var(--tile-border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 14px;
+  }
+  .tile-icon {
+    width: 46px; height: 46px; border-radius: 13px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--tbg-light);
+    color: var(--tcolor-light);
+  }
+  html[data-theme="dark"] .tile-icon {
+    background: var(--tbg-dark);
+    color: var(--tcolor-dark);
+  }
+  .tile-label { font-size: 12.5px; font-weight: 600; color: var(--tile-label-color); text-align: center; }
+
+  .empty-note { font-size: 13px; color: var(--empty-color); font-weight: 500; }
+
+  #sections {
+    display: flex;
+    flex-direction: column;
+    gap: 44px;
+    width: 70%;
+    margin: 0 auto;
+  }
+
+  @media (max-width: 760px) {
+    /* Below the breakpoint the sidebar becomes a footer beneath .main
+       (see order below), so the independent-scroll-columns layout above
+       is undone in favor of one normally-scrolling page. */
+    body { flex-direction: column; height: auto; overflow: visible; }
+    .main { height: auto; overflow-y: visible; padding: 28px 24px; order: 1; }
+    #sections { width: 100%; }
+    .tile-grid { justify-content: center; }
+    .sidebar {
+      width: auto;
+      height: auto;
+      overflow-y: visible;
+      position: static;
+      border-right: none;
+      border-bottom: none;
+      border-top: 1px solid var(--sidebar-border);
+      order: 2;
+    }
+  }
+</style>
+</head>
+<body>
+
+<div class="sidebar no-scrollbar">
+  <div>
+    <div class="sidebar-clock">
+      <div class="sidebar-clock-time" id="clock-time">--:--</div>
+      <div class="sidebar-clock-date" id="clock-date">-</div>
+    </div>
+    <div class="sidebar-label">Servers</div>
+    <div class="server-list" id="server-list">
+      <!-- populated by JS from /api/stats -->
+    </div>
+  </div>
+
+  <div class="sidebar-footer">
+    <div class="disk-gauge" id="disk-gauge" hidden>
+      <div class="disk-gauge-label">
+        <span id="disk-gauge-icon"></span>
+        <span id="disk-gauge-label-text">Storage</span>
+      </div>
+      <div class="disk-gauge-track"><div class="disk-gauge-fill" id="disk-gauge-fill" style="width:0%;"></div></div>
+      <div class="disk-gauge-meta"><span id="disk-gauge-used">- used</span><span id="disk-gauge-total">- total</span></div>
+    </div>
+
+    <div class="sidebar-bottom">
+      <a class="settings-entry" href="/manage.html" title="Manage services" id="settings-icon"></a>
+      <div class="theme-toggle" id="theme-toggle" title="Toggle light / dark mode">
+        <span class="track-icon icon-sun" id="icon-sun"></span>
+        <div class="knob" id="icon-knob"></div>
+        <span class="track-icon icon-moon" id="icon-moon"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="main no-scrollbar">
+
+  <div class="top-section">
+    <div class="top-hero">
+      <div class="top-hero-tag">
+        <span id="hero-tag-text">Good day</span>
+      </div>
+      <div class="top-hero-text" id="hero-text">Loading...</div>
+    </div>
+  </div>
+
+  <div id="sections">
+    <!-- populated by JS from /api/config -->
+  </div>
+
+</div>
+
+<script src="/app.js"></script>
+<script>
+// ---------------------------------------------------------------------
+// Static chrome icons that don't need the full icon library
+
+document.getElementById("disk-gauge-icon").innerHTML = chromeIcon("hard_drive", 13);
+document.getElementById("settings-icon").innerHTML = chromeIcon("settings", 16);
+document.getElementById("icon-sun").innerHTML = chromeIcon("light_mode", 14);
+document.getElementById("icon-knob").innerHTML = chromeIcon("light_mode", 13);
+document.getElementById("icon-moon").innerHTML = chromeIcon("dark_mode", 13);
+
+wireThemeToggle("theme-toggle");
+
+// ---------------------------------------------------------------------
+// Clock
+
+// clock_format: "auto" (browser/locale decides, the default - same as
+// before this setting existed), "12", or "24". timezone: an IANA zone
+// name, or "" to use the browser's own local time (also the default).
+// Both are filled in by refreshMotd() once /api/motd responds.
+let clockFormat = "auto";
+let clockTimezone = "";
+
+function updateClock() {
+  const now = new Date();
+  const timeOpts = { hour: "2-digit", minute: "2-digit" };
+  if (clockFormat === "12") timeOpts.hour12 = true;
+  else if (clockFormat === "24") timeOpts.hour12 = false;
+  if (clockTimezone) timeOpts.timeZone = clockTimezone;
+  const dateOpts = { weekday: "long", month: "long", day: "numeric" };
+  if (clockTimezone) dateOpts.timeZone = clockTimezone;
+  const time = now.toLocaleTimeString([], timeOpts);
+  const date = now.toLocaleDateString([], dateOpts);
+  document.getElementById("clock-time").textContent = time;
+  document.getElementById("clock-date").textContent = date;
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+// ---------------------------------------------------------------------
+// Greeting / motd (GET /api/motd)
+
+async function refreshMotd() {
+  try {
+    const data = await apiGet("/api/motd");
+    if (data.clock_format) clockFormat = data.clock_format;
+    if (typeof data.timezone === "string") clockTimezone = data.timezone;
+    document.getElementById("hero-tag-text").textContent = data.header || (data.greeting + ", " + data.name);
+    document.getElementById("hero-text").textContent = data.message || "Nothing new to report.";
+  } catch (e) {
+    console.error("failed to load motd:", e);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Server stats / vault gauge (GET /api/stats)
+
+const STATUS_COLOR_VAR = {
+  up: "var(--status-green)",
+  down: "var(--status-red)",
+  paused: "var(--status-gray)",
+  pending: "var(--status-amber)",
+};
+
+function fmtLoad(n) {
+  return typeof n === "number" ? n.toFixed(2) : "-";
+}
+function fmtPct(n) {
+  return typeof n === "number" ? Math.round(n) + "%" : "-";
+}
+function fmtGb(gb) {
+  if (typeof gb !== "number") return "-";
+  if (gb >= 1000) return (gb / 1000).toFixed(1) + " TB";
+  return Math.round(gb) + " GB";
+}
+
+function renderServers(servers) {
+  const list = document.getElementById("server-list");
+  list.innerHTML = (servers || []).map(function (s) {
+    const load = s.load || [null, null, null];
+    const statusLabel = s.status === "up" ? "" : " (" + (s.status || "unknown") + ")";
+    return (
+      '<div class="server-row">' +
+        '<div class="server-icon">' + chromeIcon("dns", 17) + "</div>" +
+        '<div class="server-meta">' +
+          '<div class="server-name">' + s.name + "</div>" +
+          '<div class="server-sub">CPU ' + fmtPct(s.cpu) + " - RAM " + fmtPct(s.mem) + statusLabel + "</div>" +
+          '<div class="server-load">' +
+            ["1m", "5m", "15m"].map(function (label, i) {
+              return '<div class="server-load-item"><div class="server-load-val">' + fmtLoad(load[i]) +
+                '</div><div class="server-load-label">' + label + "</div></div>";
+            }).join("") +
+          "</div>" +
+        "</div>" +
+        '<div class="status-dot" style="background:' + (STATUS_COLOR_VAR[s.status] || "var(--status-gray)") + ';"></div>' +
+      "</div>"
+    );
+  }).join("");
+}
+
+function renderVault(vault) {
+  const gauge = document.getElementById("disk-gauge");
+  if (!vault || typeof vault.used_gb !== "number" || typeof vault.total_gb !== "number") {
+    gauge.hidden = true;
+    return;
+  }
+  gauge.hidden = false;
+  const pct = vault.total_gb > 0 ? Math.min(100, (vault.used_gb / vault.total_gb) * 100) : 0;
+  document.getElementById("disk-gauge-label-text").textContent = (vault.name ? vault.name + " storage" : "Storage");
+  document.getElementById("disk-gauge-fill").style.width = pct + "%";
+  document.getElementById("disk-gauge-used").textContent = fmtGb(vault.used_gb) + " used";
+  document.getElementById("disk-gauge-total").textContent = fmtGb(vault.total_gb) + " total";
+}
+
+async function refreshStats() {
+  try {
+    const data = await apiGet("/api/stats");
+    renderServers(data.servers);
+    renderVault(data.vault);
+  } catch (e) {
+    console.error("failed to load stats:", e);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Service tiles (GET /api/config) - only active services are shown.
+
+let iconLib = {};
+
+function renderSections(config) {
+  const root = document.getElementById("sections");
+  const sections = (config && config.sections) || [];
+
+  const activeSections = sections.filter(function (s) { return s.active !== false; });
+
+  root.innerHTML = activeSections.map(function (section) {
+    const activeServices = (section.services || []).filter(function (s) { return s.active !== false; });
+    const tiles = activeServices.map(function (svc) {
+      return (
+        '<a class="tile" href="' + (svc.url || "#") + '">' +
+          '<div class="tile-icon" style="' + badgeStyle(svc) + '">' + renderIcon(iconLib, svc.icon, 24) + "</div>" +
+          '<div class="tile-label">' + svc.name + "</div>" +
+        "</a>"
+      );
+    }).join("");
+    const body = activeServices.length
+      ? '<div class="tile-grid">' + tiles + "</div>"
+      : '<div class="empty-note">No active services in this section yet.</div>';
+    return (
+      '<div class="section">' +
+        '<div class="section-head">' +
+          '<div class="section-title">' + section.title + "</div>" +
+          '<div class="section-count">' + activeServices.length + " service" + (activeServices.length === 1 ? "" : "s") + "</div>" +
+        "</div>" +
+        body +
+      "</div>"
+    );
+  }).join("");
+
+  if (!sections.length) {
+    root.innerHTML = '<div class="empty-note">No sections yet - head to <a href="/manage.html">Manage services</a> to add one.</div>';
+  } else if (!activeSections.length) {
+    root.innerHTML = '<div class="empty-note">All sections are currently hidden - head to <a href="/manage.html">Manage services</a> to turn one back on.</div>';
+  }
+}
+
+async function refreshConfig() {
+  try {
+    const config = await apiGet("/api/config");
+    renderSections(config);
+  } catch (e) {
+    console.error("failed to load config:", e);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Init
+
+loadIconLib().then(function (lib) {
+  iconLib = lib;
+  refreshConfig();
+});
+refreshMotd();
+refreshStats();
+setInterval(refreshMotd, 60 * 1000);
+setInterval(refreshStats, 10 * 1000);
+setInterval(refreshConfig, 30 * 1000);
+</script>
+</body>
+</html>

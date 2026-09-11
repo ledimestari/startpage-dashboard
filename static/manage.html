@@ -1,0 +1,906 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manage services - Homelab Dashboard</title>
+<script>
+  (function () {
+    try {
+      var stored = localStorage.getItem("theme");
+      var theme = stored === "light" || stored === "dark"
+        ? stored
+        : (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", theme);
+    } catch (e) {
+      document.documentElement.setAttribute("data-theme", "light");
+    }
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); }
+
+  :root {
+    --bg: #F7F6F2;
+    --text: #1E2320;
+    --muted: #746F63;
+    --muted2: #9A9587;
+    --card-bg: #FCFBF8;
+    --card-border: #E9E7DF;
+    --row-border: #EFEDE5;
+    --group-bg: #F7F6F2;
+    --drag-color: #C8C4B7;
+    --url-bg: #F2F0E9;
+    --url-border: #E9E7DF;
+    --url-text: #746F63;
+    --icon-btn-color: #9A9587;
+    --danger: #C4503A;
+    --toggle-on: #4A5CE8;
+    --toggle-off: #D9D6CB;
+    --accent: #4A5CE8;
+    --accent-text: #FFFFFF;
+    --btn-ghost-bg: #F2F0E9;
+    --btn-ghost-text: #57534A;
+    --modal-overlay: rgba(24, 21, 15, 0.45);
+    --modal-card-bg: #FFFFFF;
+    --modal-shadow: rgba(30, 27, 20, 0.28);
+    --field-bg: #FBFAF6;
+    --field-border: #E4E1D6;
+    --field-text: #1E2320;
+    --field-placeholder: #B2AC9C;
+    --icon-swatch-bg: #F2F0E9;
+    --icon-swatch-color: #57534A;
+    --icon-swatch-sel-border: #4A5CE8;
+    --icon-swatch-sel-bg: #EAEDFC;
+    --icon-swatch-sel-color: #4A5CE8;
+    --close-bg: #F2F0E9;
+    --close-color: #9A9587;
+    --toast-bg: #1E2320;
+    --toast-text: #F7F6F2;
+  }
+
+  html[data-theme="dark"] {
+    --bg: #12151B;
+    --text: #E7E9EC;
+    --muted: #8B93A1;
+    --muted2: #6B7280;
+    --card-bg: #171B22;
+    --card-border: #262B33;
+    --row-border: #20252D;
+    --group-bg: #12151B;
+    --drag-color: #545C68;
+    --url-bg: #20252D;
+    --url-border: #262B33;
+    --url-text: #8B93A1;
+    --icon-btn-color: #8B93A1;
+    --danger: #F87171;
+    --toggle-on: #8C97FF;
+    --toggle-off: #333A46;
+    --accent: #8C97FF;
+    --accent-text: #12151B;
+    --btn-ghost-bg: #20252D;
+    --btn-ghost-text: #AEB4BF;
+    --modal-overlay: rgba(0, 0, 0, 0.6);
+    --modal-card-bg: #1B2028;
+    --modal-shadow: rgba(0, 0, 0, 0.5);
+    --field-bg: #20252D;
+    --field-border: #2A303A;
+    --field-text: #E7E9EC;
+    --field-placeholder: #6B7280;
+    --icon-swatch-bg: #20252D;
+    --icon-swatch-color: #AEB4BF;
+    --icon-swatch-sel-border: #8C97FF;
+    --icon-swatch-sel-bg: #1B2333;
+    --icon-swatch-sel-color: #8C97FF;
+    --close-bg: #20252D;
+    --close-color: #8B93A1;
+    --toast-bg: #E7E9EC;
+    --toast-text: #12151B;
+  }
+
+  body {
+    font-family: 'Manrope', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    color: var(--text);
+    padding: 44px 52px 80px;
+    max-width: 1080px;
+    margin: 0 auto;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  button { font: inherit; cursor: pointer; }
+
+  .back-link { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 14px; }
+  .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; flex-wrap: wrap; margin-bottom: 28px; }
+  .page-title { font-size: 24px; font-weight: 800; letter-spacing: -0.01em; }
+  .page-sub { font-size: 14px; color: var(--muted); margin-top: 6px; font-weight: 500; }
+  .header-actions { display: flex; gap: 10px; flex-shrink: 0; }
+
+  .btn-add {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--accent); color: var(--accent-text);
+    border: none; border-radius: 12px; padding: 12px 18px;
+    font-size: 13.5px; font-weight: 700;
+  }
+  .btn-add:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-add-outline {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: transparent; color: var(--btn-ghost-text);
+    border: 1.5px solid var(--field-border);
+    border-radius: 12px; padding: 12px 18px;
+    font-size: 13.5px; font-weight: 700;
+  }
+
+  .list-card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 18px; overflow: hidden; }
+  .empty-state { padding: 48px 24px; text-align: center; color: var(--muted); font-size: 14px; font-weight: 500; }
+
+  .group-label {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 14px 22px;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted2);
+    background: var(--group-bg);
+  }
+  .group-label-main { display: flex; align-items: center; gap: 8px; }
+  .group-actions { display: flex; align-items: center; gap: 4px; }
+
+  .row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 22px;
+    border-bottom: 1px solid var(--row-border);
+  }
+  .row.empty-row { color: var(--muted2); font-size: 13px; font-weight: 500; font-style: italic; }
+
+  .drag-handle { color: var(--drag-color); flex-shrink: 0; cursor: grab; }
+
+  .row-icon {
+    width: 38px; height: 38px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    background: var(--tbg-light); color: var(--tcolor-light);
+  }
+  html[data-theme="dark"] .row-icon { background: var(--tbg-dark); color: var(--tcolor-dark); }
+
+  .row-name-col { width: 190px; flex-shrink: 0; min-width: 0; }
+  .row-name { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .row-url-col { flex: 1; min-width: 0; }
+  .row-url {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 13px; color: var(--url-text); font-weight: 500;
+    background: var(--url-bg); border: 1px solid var(--url-border);
+    border-radius: 8px; padding: 7px 12px;
+    max-width: 320px;
+  }
+  .row-url span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .pill {
+    font-size: 11.5px; font-weight: 700;
+    border-radius: 999px; padding: 6px 12px;
+    flex-shrink: 0; max-width: 150px; text-align: center;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    background: var(--tbg-light); color: var(--tcolor-light);
+  }
+  html[data-theme="dark"] .pill { background: var(--tbg-dark); color: var(--tcolor-dark); }
+
+  .row-toggle {
+    width: 38px; height: 22px; border-radius: 999px;
+    background: var(--toggle-off);
+    border: none;
+    padding: 2px; flex-shrink: 0;
+    display: flex; align-items: center;
+  }
+  .row-toggle.on { background: var(--toggle-on); }
+  .row-toggle .knob { width: 18px; height: 18px; border-radius: 50%; background: #FFFFFF; transition: transform 0.15s ease; }
+  .row-toggle.on .knob { transform: translateX(16px); }
+
+  .section-toggle {
+    width: 32px; height: 18px; border-radius: 999px;
+    background: var(--toggle-off);
+    border: none;
+    padding: 2px; flex-shrink: 0;
+    display: flex; align-items: center;
+  }
+  .section-toggle.on { background: var(--toggle-on); }
+  .section-toggle .knob { width: 14px; height: 14px; border-radius: 50%; background: #FFFFFF; transition: transform 0.15s ease; }
+  .section-toggle.on .knob { transform: translateX(14px); }
+
+  .row-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  .icon-btn {
+    width: 32px; height: 32px; border-radius: 9px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--icon-btn-color);
+    background: transparent;
+    border: 1px solid transparent;
+  }
+  .icon-btn:hover { background: var(--url-bg); }
+  .icon-btn.danger { color: var(--danger); }
+  .icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .icon-btn:disabled:hover { background: transparent; }
+
+  /* Modals */
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: var(--modal-overlay);
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+    z-index: 50;
+  }
+  .modal-overlay[hidden] { display: none; }
+  .modal-card {
+    width: 440px; max-width: 100%;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+    background: var(--modal-card-bg);
+    border-radius: 20px;
+    box-shadow: 0 24px 64px var(--modal-shadow);
+    padding: 28px;
+    display: flex; flex-direction: column; gap: 22px;
+  }
+  .modal-header { display: flex; align-items: center; justify-content: space-between; }
+  .modal-title { font-size: 18px; font-weight: 800; letter-spacing: -0.005em; }
+  .modal-close {
+    width: 30px; height: 30px; border-radius: 9px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--close-color); background: var(--close-bg);
+    border: none; flex-shrink: 0;
+  }
+  .modal-hint { font-size: 13px; color: var(--muted); font-weight: 500; margin-top: -4px; }
+  .modal-body { display: flex; flex-direction: column; gap: 16px; }
+  .field { display: flex; flex-direction: column; gap: 7px; }
+  .field[hidden] { display: none; }
+  .field-label { font-size: 12px; font-weight: 700; color: var(--btn-ghost-text); }
+  .field-input, .select-input {
+    display: flex; align-items: center; width: 100%;
+    font-family: inherit;
+    font-size: 13.5px; color: var(--field-text); font-weight: 500;
+    background: var(--field-bg); border: 1.5px solid var(--field-border); border-radius: 10px;
+    padding: 10px 13px;
+  }
+  .select-input { font-weight: 600; appearance: none; -webkit-appearance: none; }
+  .field-input:focus, .select-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .field-input::placeholder { color: var(--field-placeholder); }
+
+  .icon-search-row { display: flex; align-items: center; gap: 9px; }
+  .icon-search-row svg { color: var(--muted2); flex-shrink: 0; }
+  .icon-search-row input { border: none; background: transparent; flex: 1; font: inherit; color: var(--field-text); outline: none; }
+  .icon-search-box {
+    display: flex; align-items: center; gap: 9px;
+    background: var(--field-bg); border: 1.5px solid var(--field-border); border-radius: 10px;
+    padding: 9px 12px; margin-bottom: 10px;
+  }
+  .icon-picker-note { font-size: 11px; color: var(--field-placeholder); font-weight: 600; margin-bottom: 8px; }
+  .icon-picker { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; max-height: 220px; overflow-y: auto; }
+  .icon-swatch {
+    aspect-ratio: 1; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    border: 2px solid transparent;
+    background: var(--icon-swatch-bg); color: var(--icon-swatch-color);
+  }
+  .icon-swatch.selected { border-color: var(--icon-swatch-sel-border); background: var(--icon-swatch-sel-bg); color: var(--icon-swatch-sel-color); }
+
+  .field-row { display: flex; align-items: center; justify-content: space-between; }
+  .modal-footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+  .btn-ghost {
+    font-size: 13.5px; font-weight: 700; color: var(--btn-ghost-text);
+    padding: 11px 18px; border-radius: 11px; background: var(--btn-ghost-bg);
+    border: none;
+  }
+  .btn-ghost:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .color-field-row { display: flex; align-items: center; gap: 10px; }
+  .color-input {
+    width: 44px; height: 34px; padding: 0;
+    border: 1.5px solid var(--field-border); border-radius: 8px;
+    background: var(--field-bg); cursor: pointer;
+  }
+  .color-input::-webkit-color-swatch-wrapper { padding: 3px; }
+  .color-input::-webkit-color-swatch { border: none; border-radius: 5px; }
+  .color-input::-moz-color-swatch { border: none; border-radius: 5px; }
+  .btn-primary {
+    font-size: 13.5px; font-weight: 700; color: var(--accent-text);
+    padding: 11px 18px; border-radius: 11px; background: var(--accent);
+    border: none;
+  }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+    background: var(--toast-bg); color: var(--toast-text);
+    padding: 12px 20px; border-radius: 10px;
+    font-size: 13.5px; font-weight: 600;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.25);
+    z-index: 100;
+  }
+
+  @media (max-width: 720px) {
+    body { padding: 28px 20px 80px; }
+    .row-name-col { width: 120px; }
+    .row-url { max-width: 140px; }
+    .pill { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<a class="back-link" href="/" id="back-link"></a>
+
+<div class="page-header">
+  <div>
+    <div class="page-title">Manage services</div>
+    <div class="page-sub">Add, reorder, or edit the services shown on your dashboard.</div>
+  </div>
+  <div class="header-actions">
+    <button class="btn-add-outline" id="add-section-btn" type="button"></button>
+    <button class="btn-add" id="add-service-btn" type="button"></button>
+  </div>
+</div>
+
+<div class="list-card">
+  <div id="list-body">
+    <!-- populated by JS -->
+  </div>
+</div>
+
+<!-- Add/Edit service modal -->
+<div class="modal-overlay" id="service-modal" hidden>
+  <div class="modal-card">
+    <form id="service-form">
+      <div class="modal-header">
+        <div class="modal-title" id="service-modal-title">Add service</div>
+        <button class="modal-close" id="service-modal-close" type="button"></button>
+      </div>
+
+      <div class="modal-body">
+        <div class="field">
+          <div class="field-label">Name</div>
+          <input class="field-input" id="service-name" type="text" placeholder="e.g. Paperless-ngx" required>
+        </div>
+
+        <div class="field">
+          <div class="field-label">Address</div>
+          <input class="field-input" id="service-url" type="text" placeholder="e.g. http://docs.anders.lan">
+        </div>
+
+        <div class="field">
+          <div class="field-label">Icon</div>
+          <div class="icon-search-box">
+            <span id="service-icon-search-icon"></span>
+            <input id="service-icon-search" type="text" placeholder="Search Material Icons">
+          </div>
+          <div class="icon-picker-note">Free choice from the full Material Symbols library</div>
+          <div class="icon-picker" id="service-icon-grid"></div>
+        </div>
+
+        <div class="field">
+          <div class="field-label">Highlight color</div>
+          <div class="color-field-row">
+            <input type="color" class="color-input" id="service-color-input">
+            <button class="btn-ghost" id="service-color-reset-btn" type="button">Use automatic</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-label">Section</div>
+          <select class="select-input" id="service-section-select"></select>
+        </div>
+
+        <div class="field-row">
+          <div class="field-label">Active</div>
+          <button class="row-toggle on" id="service-active-toggle" type="button"><div class="knob"></div></button>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn-ghost" id="service-cancel-btn" type="button">Cancel</button>
+        <button class="btn-primary" id="service-save-btn" type="submit">Add service</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Add/Edit section modal -->
+<div class="modal-overlay" id="section-modal" hidden>
+  <div class="modal-card">
+    <form id="section-form">
+      <div class="modal-header">
+        <div class="modal-title" id="section-modal-title">Add section</div>
+        <button class="modal-close" id="section-modal-close" type="button"></button>
+      </div>
+
+      <div class="modal-hint">Sections group services on your dashboard, like "Internet-facing" or "Local only".</div>
+
+      <div class="modal-body">
+        <div class="field">
+          <div class="field-label">Section name</div>
+          <input class="field-input" id="section-name" type="text" placeholder="e.g. Media, Network" required>
+        </div>
+
+        <div class="field">
+          <div class="field-label">Icon</div>
+          <div class="icon-search-box">
+            <span id="section-icon-search-icon"></span>
+            <input id="section-icon-search" type="text" placeholder="Search Material Icons">
+          </div>
+          <div class="icon-picker-note">Free choice from the full Material Symbols library</div>
+          <div class="icon-picker" id="section-icon-grid"></div>
+        </div>
+
+        <div class="field" id="section-position-field">
+          <div class="field-label">Position</div>
+          <select class="select-input" id="section-position-select">
+            <option value="bottom">Add to bottom</option>
+            <option value="top">Add to top</option>
+          </select>
+        </div>
+
+        <div class="field-row">
+          <div class="field-label">Active</div>
+          <button class="row-toggle on" id="section-active-toggle" type="button"><div class="knob"></div></button>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn-ghost" id="section-cancel-btn" type="button">Cancel</button>
+        <button class="btn-primary" id="section-save-btn" type="submit">Add section</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="toast" hidden></div>
+
+<script src="/app.js"></script>
+<script>
+// ---------------------------------------------------------------------
+// Static icon injection
+
+document.getElementById("back-link").innerHTML = chromeIcon("arrow_back", 14) + " Back to dashboard";
+document.getElementById("add-section-btn").innerHTML = chromeIcon("add", 15) + " Add section";
+document.getElementById("add-service-btn").innerHTML = chromeIcon("add", 15) + " Add service";
+document.getElementById("service-modal-close").innerHTML = chromeIcon("close", 14);
+document.getElementById("section-modal-close").innerHTML = chromeIcon("close", 14);
+document.getElementById("service-icon-search-icon").innerHTML = chromeIcon("search", 15);
+document.getElementById("section-icon-search-icon").innerHTML = chromeIcon("search", 15);
+
+// ---------------------------------------------------------------------
+// State
+
+let CONFIG = { sections: [] };
+let iconLib = {};
+let dragState = null;
+let editingServiceId = null;
+let editingSectionId = null;
+let selectedServiceIcon = "apps";
+let selectedSectionIcon = "folder";
+let serviceActive = true;
+let selectedServiceColor = null; // null = automatic (derived from the service's id)
+let sectionActive = true;
+
+function escapeHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+  });
+}
+function findService(id) {
+  for (const s of CONFIG.sections) {
+    const f = s.services.find(function (x) { return x.id === id; });
+    if (f) return f;
+  }
+  return null;
+}
+function findSectionOf(serviceId) {
+  return CONFIG.sections.find(function (s) { return s.services.some(function (x) { return x.id === serviceId; }); });
+}
+
+let toastTimer = null;
+function showToast(msg) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { el.hidden = true; }, 4000);
+}
+
+// ---------------------------------------------------------------------
+// Rendering
+
+function iconBtn(iconName, action, id, danger, disabled) {
+  return '<button class="icon-btn' + (danger ? " danger" : "") + '" data-action="' + action + '" data-id="' + id +
+    '"' + (disabled ? " disabled" : "") + ' type="button">' + chromeIcon(iconName, 14) + "</button>";
+}
+
+function rowHtml(svc, section) {
+  return (
+    '<div class="row" draggable="true" data-id="' + svc.id + '" data-section="' + section.id + '">' +
+      '<div class="drag-handle">' + chromeIcon("drag_indicator", 14) + "</div>" +
+      '<div class="row-icon" style="' + badgeStyle(svc) + '">' + renderIcon(iconLib, svc.icon, 19) + "</div>" +
+      '<div class="row-name-col"><div class="row-name">' + escapeHtml(svc.name) + "</div></div>" +
+      '<div class="row-url-col"><div class="row-url"><span>' + escapeHtml(svc.url || "no address set") + "</span></div></div>" +
+      '<div class="pill" style="' + badgeStyle(section.id) + '">' + escapeHtml(section.title) + "</div>" +
+      '<button class="row-toggle ' + (svc.active !== false ? "on" : "") + '" data-action="toggle" data-id="' + svc.id + '" type="button"><div class="knob"></div></button>' +
+      '<div class="row-actions">' +
+        iconBtn("edit", "service-edit", svc.id) +
+        iconBtn("delete", "service-delete", svc.id, true) +
+      "</div>" +
+    "</div>"
+  );
+}
+
+function sectionHtml(section, idx, total) {
+  const rows = section.services.length
+    ? section.services.map(function (svc) { return rowHtml(svc, section); }).join("")
+    : '<div class="row empty-row">No services in this section yet.</div>';
+  return (
+    '<div class="group-label">' +
+      '<div class="group-label-main">' + renderIcon(iconLib, section.icon, 15) + "<span>" + escapeHtml(section.title) + "</span></div>" +
+      '<div class="group-actions">' +
+        '<button class="section-toggle' + (section.active !== false ? " on" : "") + '" data-action="section-toggle" data-id="' + section.id + '" type="button" title="Show/hide this section on the dashboard"><div class="knob"></div></button>' +
+        iconBtn("arrow_upward", "section-up", section.id, false, idx === 0) +
+        iconBtn("arrow_downward", "section-down", section.id, false, idx === total - 1) +
+        iconBtn("edit", "section-edit", section.id) +
+        iconBtn("delete", "section-delete", section.id, true) +
+      "</div>" +
+    "</div>" +
+    rows
+  );
+}
+
+function renderList() {
+  const root = document.getElementById("list-body");
+  const addServiceBtn = document.getElementById("add-service-btn");
+  if (!CONFIG.sections.length) {
+    root.innerHTML = '<div class="empty-state">No sections yet. Click &ldquo;Add section&rdquo; to create your first one.</div>';
+    addServiceBtn.disabled = true;
+    return;
+  }
+  addServiceBtn.disabled = false;
+  root.innerHTML = CONFIG.sections.map(function (s, i) { return sectionHtml(s, i, CONFIG.sections.length); }).join("");
+}
+
+async function refreshConfig() {
+  CONFIG = await apiGet("/api/config");
+  renderList();
+}
+
+// ---------------------------------------------------------------------
+// List interactions: toggle / edit / delete / reorder
+
+document.getElementById("list-body").addEventListener("click", function (e) {
+  const btn = e.target.closest("[data-action]");
+  if (!btn || btn.disabled) return;
+  const action = btn.dataset.action;
+  const id = btn.dataset.id;
+  if (action === "toggle") return onToggleService(id);
+  if (action === "service-edit") return openServiceModal(id);
+  if (action === "service-delete") return onDeleteService(id);
+  if (action === "section-toggle") return onToggleSection(id);
+  if (action === "section-edit") return openSectionModal(id);
+  if (action === "section-delete") return onDeleteSection(id);
+  if (action === "section-up") return onMoveSection(id, -1);
+  if (action === "section-down") return onMoveSection(id, 1);
+});
+
+document.getElementById("list-body").addEventListener("dragstart", function (e) {
+  const row = e.target.closest(".row[data-id]");
+  if (!row) return;
+  dragState = { serviceId: row.dataset.id, sectionId: row.dataset.section };
+  e.dataTransfer.effectAllowed = "move";
+});
+document.getElementById("list-body").addEventListener("dragover", function (e) {
+  const row = e.target.closest(".row[data-id]");
+  if (!row || !dragState || dragState.sectionId !== row.dataset.section) return;
+  e.preventDefault();
+});
+document.getElementById("list-body").addEventListener("drop", async function (e) {
+  const row = e.target.closest(".row[data-id]");
+  if (!row || !dragState || dragState.sectionId !== row.dataset.section) return;
+  e.preventDefault();
+  const section = CONFIG.sections.find(function (s) { return s.id === row.dataset.section; });
+  const fromIdx = section.services.findIndex(function (s) { return s.id === dragState.serviceId; });
+  let toIdx = section.services.findIndex(function (s) { return s.id === row.dataset.id; });
+  dragState = null;
+  if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return;
+  const rect = row.getBoundingClientRect();
+  const before = (e.clientY - rect.top) < rect.height / 2;
+  if (!before) toIdx += 1;
+  const [moved] = section.services.splice(fromIdx, 1);
+  if (fromIdx < toIdx) toIdx -= 1;
+  section.services.splice(toIdx, 0, moved);
+  renderList();
+  try {
+    await apiSend("POST", "/api/reorder/services", { section_id: section.id, order: section.services.map(function (s) { return s.id; }) });
+  } catch (err) {
+    showToast("Failed to save order: " + err.message);
+    refreshConfig();
+  }
+});
+
+async function onToggleService(id) {
+  const svc = findService(id);
+  if (!svc) return;
+  const newActive = !(svc.active !== false);
+  svc.active = newActive;
+  renderList();
+  try {
+    await apiSend("PATCH", "/api/services/" + id, { active: newActive });
+  } catch (err) {
+    showToast("Failed to update: " + err.message);
+    refreshConfig();
+  }
+}
+
+async function onToggleSection(id) {
+  const section = CONFIG.sections.find(function (s) { return s.id === id; });
+  if (!section) return;
+  const newActive = !(section.active !== false);
+  section.active = newActive;
+  renderList();
+  try {
+    await apiSend("PATCH", "/api/sections/" + id, { active: newActive });
+  } catch (err) {
+    showToast("Failed to update: " + err.message);
+    refreshConfig();
+  }
+}
+
+async function onDeleteService(id) {
+  const svc = findService(id);
+  if (!svc) return;
+  if (!confirm('Remove "' + svc.name + '" from the dashboard?')) return;
+  try {
+    await apiSend("DELETE", "/api/services/" + id);
+    await refreshConfig();
+  } catch (err) {
+    showToast("Failed to delete: " + err.message);
+  }
+}
+
+async function onDeleteSection(id) {
+  const section = CONFIG.sections.find(function (s) { return s.id === id; });
+  if (!section) return;
+  const count = section.services.length;
+  const msg = count
+    ? 'Delete "' + section.title + '" and its ' + count + " service" + (count === 1 ? "" : "s") + "?"
+    : 'Delete "' + section.title + '"?';
+  if (!confirm(msg)) return;
+  try {
+    await apiSend("DELETE", "/api/sections/" + id);
+    await refreshConfig();
+  } catch (err) {
+    showToast("Failed to delete: " + err.message);
+  }
+}
+
+async function onMoveSection(id, dir) {
+  const idx = CONFIG.sections.findIndex(function (s) { return s.id === id; });
+  const newIdx = idx + dir;
+  if (idx === -1 || newIdx < 0 || newIdx >= CONFIG.sections.length) return;
+  const arr = CONFIG.sections;
+  const tmp = arr[idx];
+  arr[idx] = arr[newIdx];
+  arr[newIdx] = tmp;
+  renderList();
+  try {
+    await apiSend("POST", "/api/reorder/sections", { order: arr.map(function (s) { return s.id; }) });
+  } catch (err) {
+    showToast("Failed to save order: " + err.message);
+    refreshConfig();
+  }
+}
+
+// ---------------------------------------------------------------------
+// Icon picker (shared logic, two independent grids)
+
+function renderIconGrid(containerId, query, selected) {
+  const names = Object.keys(iconLib);
+  const q = query.trim().toLowerCase().replace(/\s+/g, "_");
+  let matches;
+  if (!q) {
+    matches = selected && iconLib[selected] ? [selected] : [];
+    matches = matches.concat(names.filter(function (n) { return n !== selected; }).slice(0, 60 - matches.length));
+  } else {
+    matches = names.filter(function (n) { return n.includes(q); }).slice(0, 90);
+  }
+  const container = document.getElementById(containerId);
+  if (!matches.length) {
+    container.innerHTML = '<div class="icon-picker-note" style="grid-column:1/-1;">No icons match "' + escapeHtml(query) + '"</div>';
+    return;
+  }
+  container.innerHTML = matches.map(function (n) {
+    return '<button type="button" class="icon-swatch' + (n === selected ? " selected" : "") + '" data-icon="' + n + '" title="' + n + '">' +
+      renderIcon(iconLib, n, 20) + "</button>";
+  }).join("");
+}
+
+document.getElementById("service-icon-search").addEventListener("input", function (e) {
+  renderIconGrid("service-icon-grid", e.target.value, selectedServiceIcon);
+});
+document.getElementById("service-icon-grid").addEventListener("click", function (e) {
+  const btn = e.target.closest("[data-icon]");
+  if (!btn) return;
+  selectedServiceIcon = btn.dataset.icon;
+  renderIconGrid("service-icon-grid", document.getElementById("service-icon-search").value, selectedServiceIcon);
+});
+
+document.getElementById("section-icon-search").addEventListener("input", function (e) {
+  renderIconGrid("section-icon-grid", e.target.value, selectedSectionIcon);
+});
+document.getElementById("section-icon-grid").addEventListener("click", function (e) {
+  const btn = e.target.closest("[data-icon]");
+  if (!btn) return;
+  selectedSectionIcon = btn.dataset.icon;
+  renderIconGrid("section-icon-grid", document.getElementById("section-icon-search").value, selectedSectionIcon);
+});
+
+// ---------------------------------------------------------------------
+// Service modal
+
+function populateSectionSelect(selectedId) {
+  const sel = document.getElementById("service-section-select");
+  sel.innerHTML = CONFIG.sections.map(function (s) {
+    return '<option value="' + s.id + '"' + (s.id === selectedId ? " selected" : "") + ">" + escapeHtml(s.title) + "</option>";
+  }).join("");
+}
+
+function updateServiceActiveToggle() {
+  const btn = document.getElementById("service-active-toggle");
+  btn.classList.toggle("on", serviceActive);
+}
+document.getElementById("service-active-toggle").addEventListener("click", function () {
+  serviceActive = !serviceActive;
+  updateServiceActiveToggle();
+});
+
+// "Automatic" means no custom color is stored - the id-based palette in
+// app.js picks it instead. The swatch still needs *some* hex value to show
+// while in automatic mode, so it previews the color that would be used.
+function autoColorHexFor(id) {
+  return colorsForId(id || "new-service").color;
+}
+function updateServiceColorUI() {
+  const input = document.getElementById("service-color-input");
+  const resetBtn = document.getElementById("service-color-reset-btn");
+  input.value = selectedServiceColor || autoColorHexFor(editingServiceId);
+  resetBtn.disabled = !selectedServiceColor;
+}
+document.getElementById("service-color-input").addEventListener("input", function (e) {
+  selectedServiceColor = e.target.value;
+  updateServiceColorUI();
+});
+document.getElementById("service-color-reset-btn").addEventListener("click", function () {
+  selectedServiceColor = null;
+  updateServiceColorUI();
+});
+
+function openServiceModal(id) {
+  if (!CONFIG.sections.length) {
+    showToast("Add a section first");
+    return;
+  }
+  editingServiceId = id || null;
+  const svc = id ? findService(id) : null;
+  document.getElementById("service-modal-title").textContent = svc ? "Edit service" : "Add service";
+  document.getElementById("service-name").value = svc ? svc.name : "";
+  document.getElementById("service-url").value = svc ? (svc.url || "") : "";
+  selectedServiceIcon = svc ? svc.icon : "apps";
+  document.getElementById("service-icon-search").value = "";
+  renderIconGrid("service-icon-grid", "", selectedServiceIcon);
+  const currentSection = svc ? findSectionOf(svc.id) : null;
+  populateSectionSelect(currentSection ? currentSection.id : CONFIG.sections[0].id);
+  serviceActive = svc ? svc.active !== false : true;
+  updateServiceActiveToggle();
+  selectedServiceColor = svc && svc.color ? svc.color : null;
+  updateServiceColorUI();
+  document.getElementById("service-save-btn").textContent = svc ? "Save changes" : "Add service";
+  document.getElementById("service-modal").hidden = false;
+  document.getElementById("service-name").focus();
+}
+function closeServiceModal() {
+  document.getElementById("service-modal").hidden = true;
+  editingServiceId = null;
+}
+document.getElementById("add-service-btn").addEventListener("click", function () { openServiceModal(null); });
+document.getElementById("service-modal-close").addEventListener("click", closeServiceModal);
+document.getElementById("service-cancel-btn").addEventListener("click", closeServiceModal);
+document.getElementById("service-modal").addEventListener("mousedown", function (e) {
+  if (e.target === this) closeServiceModal();
+});
+
+document.getElementById("service-form").addEventListener("submit", async function (e) {
+  e.preventDefault();
+  const name = document.getElementById("service-name").value.trim();
+  if (!name) { showToast("Name is required"); return; }
+  const payload = {
+    name: name,
+    url: document.getElementById("service-url").value.trim(),
+    icon: selectedServiceIcon,
+    section_id: document.getElementById("service-section-select").value,
+    active: serviceActive,
+    color: selectedServiceColor || "",
+  };
+  try {
+    if (editingServiceId) {
+      await apiSend("PATCH", "/api/services/" + editingServiceId, payload);
+    } else {
+      await apiSend("POST", "/api/services", payload);
+    }
+    closeServiceModal();
+    await refreshConfig();
+  } catch (err) {
+    showToast("Failed to save: " + err.message);
+  }
+});
+
+// ---------------------------------------------------------------------
+// Section modal
+
+function openSectionModal(id) {
+  editingSectionId = id || null;
+  const section = id ? CONFIG.sections.find(function (s) { return s.id === id; }) : null;
+  document.getElementById("section-modal-title").textContent = section ? "Edit section" : "Add section";
+  document.getElementById("section-name").value = section ? section.title : "";
+  selectedSectionIcon = section ? section.icon : "folder";
+  document.getElementById("section-icon-search").value = "";
+  renderIconGrid("section-icon-grid", "", selectedSectionIcon);
+  document.getElementById("section-position-field").hidden = !!section;
+  sectionActive = section ? section.active !== false : true;
+  updateSectionActiveToggle();
+  document.getElementById("section-save-btn").textContent = section ? "Save changes" : "Add section";
+  document.getElementById("section-modal").hidden = false;
+  document.getElementById("section-name").focus();
+}
+function closeSectionModal() {
+  document.getElementById("section-modal").hidden = true;
+  editingSectionId = null;
+}
+
+function updateSectionActiveToggle() {
+  const btn = document.getElementById("section-active-toggle");
+  btn.classList.toggle("on", sectionActive);
+}
+document.getElementById("section-active-toggle").addEventListener("click", function () {
+  sectionActive = !sectionActive;
+  updateSectionActiveToggle();
+});
+document.getElementById("add-section-btn").addEventListener("click", function () { openSectionModal(null); });
+document.getElementById("section-modal-close").addEventListener("click", closeSectionModal);
+document.getElementById("section-cancel-btn").addEventListener("click", closeSectionModal);
+document.getElementById("section-modal").addEventListener("mousedown", function (e) {
+  if (e.target === this) closeSectionModal();
+});
+
+document.getElementById("section-form").addEventListener("submit", async function (e) {
+  e.preventDefault();
+  const title = document.getElementById("section-name").value.trim();
+  if (!title) { showToast("Section name is required"); return; }
+  const payload = { title: title, icon: selectedSectionIcon, active: sectionActive };
+  try {
+    if (editingSectionId) {
+      await apiSend("PATCH", "/api/sections/" + editingSectionId, payload);
+    } else {
+      payload.position = document.getElementById("section-position-select").value;
+      await apiSend("POST", "/api/sections", payload);
+    }
+    closeSectionModal();
+    await refreshConfig();
+  } catch (err) {
+    showToast("Failed to save: " + err.message);
+  }
+});
+
+document.addEventListener("keydown", function (e) {
+  if (e.key !== "Escape") return;
+  if (!document.getElementById("service-modal").hidden) closeServiceModal();
+  if (!document.getElementById("section-modal").hidden) closeSectionModal();
+});
+
+// ---------------------------------------------------------------------
+// Init
+
+loadIconLib().then(function (lib) {
+  iconLib = lib;
+  refreshConfig();
+});
+</script>
+</body>
+</html>
