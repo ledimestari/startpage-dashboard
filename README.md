@@ -9,6 +9,10 @@ editable list of services — all served by **one dependency-free Python
 script**. No database, no build step, no accounts, no framework to keep
 up to date.
 
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/87b3bad3-eb48-4c4c-859b-1622e7e9f974" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/8c51a0fa-a5b1-4744-b359-9ef98ae46172" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/e67d48c4-391a-4b49-ba24-4ccd13560e54" />
+
 ## Features
 
 **Dashboard** (`/`)
