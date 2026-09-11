@@ -1,2 +1,2 @@
-Welcome back, John!
+Welcome back
 All systems are running normally. No new alerts since your last visit.
