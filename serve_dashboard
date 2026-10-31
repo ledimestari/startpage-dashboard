@@ -1,0 +1,672 @@
+#!/usr/bin/env python3
+"""serve_dashboard - HTTP server for the homelab dashboard.
+
+Serves the dashboard page (static/index.html), the manage-services page
+(static/manage.html), and the JSON APIs they use:
+
+    GET    /api/motd               -> {"name", "greeting", "header", "message", "clock_format", "timezone"}
+    GET    /api/stats              -> {"servers": [...], "vault": {...}|null}   (vault comes from NAS_DISK_PATH, not Beszel)
+    GET    /api/config             -> {"sections": [...]}   (full dashboard layout)
+    POST   /api/sections           -> create a section
+    PATCH  /api/sections/<id>      -> rename / re-icon / toggle a section
+    DELETE /api/sections/<id>      -> delete a section (and its services)
+    POST   /api/services           -> create a service
+    PATCH  /api/services/<id>      -> edit / move / toggle a service
+    DELETE /api/services/<id>      -> delete a service
+    POST   /api/reorder/sections   -> {"order": [id, ...]}
+    POST   /api/reorder/services   -> {"section_id": id, "order": [id, ...]}
+
+The dashboard layout (sections + services) is persisted to services.json
+next to this script, so edits made through "Manage services" survive a
+restart. Configuration lives in config.env next to this script (copy
+config.env.example to config.env and fill it in first).
+
+No third-party dependencies - stdlib only, so this can just be run
+directly with `python3 serve_dashboard` (or `./serve_dashboard` once
+it's executable) on the homeserver. Intended for a trusted local
+network only; it has no authentication of its own.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sys
+import time
+import threading
+import uuid
+import urllib.request
+import urllib.error
+import urllib.parse
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover - Python < 3.9
+    ZoneInfo = None
+
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+
+
+# --------------------------------------------------------------------------
+# Config
+
+def load_env(path: Path) -> dict:
+    env = {}
+    if not path.exists():
+        return env
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        env[key.strip()] = value.strip().strip('"').strip("'")
+    return env
+
+
+_config_path = BASE_DIR / "config.env"
+CONFIG = load_env(_config_path)
+if not CONFIG:
+    print(f"warning: {_config_path} not found or empty - copy config.env.example "
+          f"to config.env and fill it in", file=sys.stderr)
+
+HOST = CONFIG.get("HOST", "0.0.0.0")
+PORT = int(CONFIG.get("PORT", "8080"))
+DASHBOARD_NAME = CONFIG.get("DASHBOARD_NAME", "there")
+MOTD_PATH = BASE_DIR / CONFIG.get("MOTD_PATH", "motd.txt")
+SERVICES_PATH = BASE_DIR / CONFIG.get("SERVICES_PATH", "services.json")
+
+BESZEL_URL = CONFIG.get("BESZEL_URL", "").rstrip("/")
+BESZEL_EMAIL = CONFIG.get("BESZEL_EMAIL", "")
+BESZEL_PASSWORD = CONFIG.get("BESZEL_PASSWORD", "")
+VAULT_SYSTEM_NAME = CONFIG.get("VAULT_SYSTEM_NAME", "").strip()
+DASHBOARD_SERVERS = [s.strip() for s in CONFIG.get("DASHBOARD_SERVERS", "").split(",") if s.strip()]
+NAS_DISK_PATH = BASE_DIR / CONFIG.get("NAS_DISK_PATH", "nas_disk.txt")
+
+# CLOCK_FORMAT: "auto" (default, browser/locale decides), "12", or "24".
+# Anything else is treated as "auto" so a bad value can't break the clock.
+CLOCK_FORMAT = CONFIG.get("CLOCK_FORMAT", "auto").strip().lower()
+if CLOCK_FORMAT not in ("auto", "12", "24"):
+    CLOCK_FORMAT = "auto"
+
+# TIMEZONE: an IANA zone name (e.g. "Europe/Helsinki"). Blank (default)
+# means "use the server's local system time", exactly like before this
+# setting existed.
+TIMEZONE = CONFIG.get("TIMEZONE", "").strip()
+
+
+# --------------------------------------------------------------------------
+# Beszel client (talks to the hub's built-in PocketBase REST API)
+
+class BeszelError(Exception):
+    pass
+
+
+_beszel_lock = threading.Lock()
+_beszel_token = None
+_beszel_token_at = 0.0
+TOKEN_MAX_AGE = 50 * 60  # re-login every 50 minutes, well under PocketBase's default token lifetime
+
+_stats_cache = None
+_stats_cache_at = 0.0
+STATS_CACHE_TTL = 10  # seconds - avoid hammering Beszel if the page is refreshed a lot
+
+
+def _beszel_get(path: str, token: str) -> dict:
+    req = urllib.request.Request(f"{BESZEL_URL}{path}", headers={"Authorization": token})
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _beszel_login() -> str:
+    global _beszel_token, _beszel_token_at
+    if not BESZEL_URL or not BESZEL_EMAIL or not BESZEL_PASSWORD:
+        raise BeszelError("BESZEL_URL / BESZEL_EMAIL / BESZEL_PASSWORD not configured")
+    payload = json.dumps({"identity": BESZEL_EMAIL, "password": BESZEL_PASSWORD}).encode("utf-8")
+    req = urllib.request.Request(
+        f"{BESZEL_URL}/api/collections/users/auth-with-password",
+        data=payload,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as e:
+        raise BeszelError(f"could not reach Beszel at {BESZEL_URL}: {e}") from e
+    token = data.get("token")
+    if not token:
+        raise BeszelError("Beszel login did not return a token - check BESZEL_EMAIL/BESZEL_PASSWORD")
+    _beszel_token = token
+    _beszel_token_at = time.time()
+    return token
+
+
+def _beszel_token_cached() -> str:
+    if not _beszel_token or (time.time() - _beszel_token_at) > TOKEN_MAX_AGE:
+        return _beszel_login()
+    return _beszel_token
+
+
+def _beszel_get_with_retry(path: str) -> dict:
+    token = _beszel_token_cached()
+    try:
+        return _beszel_get(path, token)
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            token = _beszel_login()
+            return _beszel_get(path, token)
+        raise BeszelError(f"Beszel returned HTTP {e.code} for {path}") from e
+    except urllib.error.URLError as e:
+        raise BeszelError(f"could not reach Beszel at {BESZEL_URL}: {e}") from e
+
+
+def read_nas_disk() -> dict | None:
+    """Reads the used/total storage figures for the storage gauge out of
+    NAS_DISK_PATH instead of Beszel. Expected file format is a single line
+    like "50/257" (used/total, in GB). Returns None (gauge hidden) if the
+    file is missing, empty, or doesn't parse - never raises."""
+    if not NAS_DISK_PATH.exists():
+        return None
+    try:
+        raw = NAS_DISK_PATH.read_text(encoding="utf-8").strip()
+        if not raw:
+            return None
+        used_str, _, total_str = raw.partition("/")
+        used_gb = float(used_str.strip())
+        total_gb = float(total_str.strip())
+    except (OSError, ValueError):
+        print(f"nas disk: could not parse {NAS_DISK_PATH} (expected format like \"50/257\")", file=sys.stderr)
+        return None
+    return {"name": VAULT_SYSTEM_NAME, "used_gb": used_gb, "total_gb": total_gb}
+
+
+def fetch_beszel_stats() -> dict:
+    """Returns {"servers": [...], "vault": {...} | None}. Never raises -
+    on any failure a server/vault entry falls back to a null/'down' shape
+    so the frontend can still render the rest of the page.
+
+    Server CPU/RAM/load still comes live from Beszel. The storage gauge
+    ("vault") no longer does - it's read from NAS_DISK_PATH via
+    read_nas_disk() instead, independent of Beszel being reachable."""
+
+    servers = [{"name": name, "status": "down", "cpu": None, "mem": None, "load": [None, None, None]}
+               for name in DASHBOARD_SERVERS]
+    vault = read_nas_disk()
+
+    try:
+        data = _beszel_get_with_retry("/api/collections/systems/records?perPage=200")
+    except BeszelError as e:
+        print(f"beszel: {e}", file=sys.stderr)
+        return {"servers": servers, "vault": vault}
+
+    by_name = {item.get("name"): item for item in data.get("items", [])}
+
+    for server in servers:
+        item = by_name.get(server["name"])
+        if not item:
+            continue
+        info = item.get("info") or {}
+        server["status"] = item.get("status", "down")
+        server["cpu"] = info.get("cpu")
+        server["mem"] = info.get("mp")
+        load = info.get("la") or [None, None, None]
+        server["load"] = [load[i] if i < len(load) else None for i in range(3)]
+
+    return {"servers": servers, "vault": vault}
+
+
+def get_stats_cached() -> dict:
+    global _stats_cache, _stats_cache_at
+    with _beszel_lock:
+        if _stats_cache is not None and (time.time() - _stats_cache_at) < STATS_CACHE_TTL:
+            return _stats_cache
+        _stats_cache = fetch_beszel_stats()
+        _stats_cache_at = time.time()
+        return _stats_cache
+
+
+# --------------------------------------------------------------------------
+# motd / greeting
+
+def _now_local() -> datetime:
+    """The current time in TIMEZONE if it's set and valid, otherwise the
+    server's local system time - exactly the previous (pre-TIMEZONE)
+    behavior, so leaving TIMEZONE unset changes nothing."""
+    if TIMEZONE and ZoneInfo is not None:
+        try:
+            return datetime.now(ZoneInfo(TIMEZONE))
+        except Exception:
+            print(f"warning: invalid TIMEZONE {TIMEZONE!r}, falling back to server local time", file=sys.stderr)
+    return datetime.now()
+
+
+def time_of_day_greeting() -> str:
+    hour = _now_local().hour
+    if hour < 5:
+        return "Good night"
+    if hour < 12:
+        return "Good morning"
+    if hour < 18:
+        return "Good afternoon"
+    return "Good evening"
+
+
+def get_motd() -> dict:
+    greeting = time_of_day_greeting()
+    header = f"{greeting}, {DASHBOARD_NAME}"
+    message = ""
+    if MOTD_PATH.exists():
+        lines = [line.strip() for line in MOTD_PATH.read_text(encoding="utf-8").splitlines()]
+        lines = [line for line in lines if line]
+        if len(lines) >= 2:
+            # Two-line format: the first line replaces the automatic
+            # "<greeting>, <name>" header entirely, and everything after it
+            # is the message shown underneath.
+            header = lines[0]
+            message = " ".join(lines[1:])
+        elif len(lines) == 1:
+            # Old single-line format, unchanged: the automatic header stays,
+            # and the one line is just the message below it.
+            message = lines[0]
+    return {
+        "name": DASHBOARD_NAME,
+        "greeting": greeting,
+        "header": header,
+        "message": message,
+        "clock_format": CLOCK_FORMAT,
+        "timezone": TIMEZONE,
+    }
+
+
+# --------------------------------------------------------------------------
+# Dashboard layout (sections + services), persisted to SERVICES_PATH.
+# "Manage services" reads and writes this through the /api/sections and
+# /api/services endpoints below.
+
+_dashboard_lock = threading.Lock()
+
+DEFAULT_DASHBOARD_CONFIG = {
+    "sections": [
+        {
+            "id": "sec_internet",
+            "title": "Internet-facing",
+            "icon": "earth",
+            "active": True,
+            "services": [
+                {"id": "svc_homeassistant", "name": "Home Assistant", "url": "http://homeassistant.local:8123", "icon": "home", "active": True},
+                {"id": "svc_immich", "name": "Immich", "url": "http://immich.local:2283", "icon": "image-multiple", "active": True},
+                {"id": "svc_filebrowser", "name": "FileBrowser", "url": "http://filebrowser.local", "icon": "folder", "active": True},
+            ],
+        },
+        {
+            "id": "sec_local",
+            "title": "Local only",
+            "icon": "lan",
+            "active": True,
+            "services": [
+                {"id": "svc_deconz", "name": "Deconz", "url": "http://deconz.local", "icon": "lightbulb", "active": True},
+                {"id": "svc_sonarr", "name": "Sonarr", "url": "http://sonarr.local:8989", "icon": "television-play", "active": True},
+                {"id": "svc_radarr", "name": "Radarr", "url": "http://radarr.local:7878", "icon": "movie", "active": True},
+                {"id": "svc_unifi", "name": "Unifi OS", "url": "https://unifi.local", "icon": "router", "active": True},
+            ],
+        },
+    ]
+}
+
+
+def new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:10]}"
+
+
+def load_dashboard_config() -> dict:
+    """Caller must hold _dashboard_lock."""
+    if not SERVICES_PATH.exists():
+        save_dashboard_config(DEFAULT_DASHBOARD_CONFIG)
+        return json.loads(json.dumps(DEFAULT_DASHBOARD_CONFIG))
+    with open(SERVICES_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_dashboard_config(data: dict) -> None:
+    """Caller must hold _dashboard_lock. Writes atomically so a crash
+    mid-write can't corrupt services.json."""
+    tmp = SERVICES_PATH.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, SERVICES_PATH)
+
+
+def find_section(data: dict, section_id: str):
+    for s in data["sections"]:
+        if s["id"] == section_id:
+            return s
+    return None
+
+
+def find_service(data: dict, service_id: str):
+    for section in data["sections"]:
+        for svc in section["services"]:
+            if svc["id"] == service_id:
+                return svc, section
+    return None, None
+
+
+SECTION_ID_RE = re.compile(r"^/api/sections/([^/]+)$")
+SERVICE_ID_RE = re.compile(r"^/api/services/([^/]+)$")
+HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def clean_color(raw) -> str | None:
+    """Returns a validated "#rrggbb" string, or None if raw is empty/missing/
+    invalid (meaning: no custom color - fall back to the automatic per-item
+    color, same as every service before this field existed)."""
+    if not raw:
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+    if not HEX_COLOR_RE.match(raw):
+        return None
+    return raw.lower()
+
+
+# --------------------------------------------------------------------------
+# HTTP handler
+
+CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+}
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "HomelabDashboard/1.0"
+
+    def log_message(self, fmt, *args):
+        sys.stderr.write(f"{self.address_string()} - {fmt % args}\n")
+
+    def _send_json(self, payload, status: int = 200):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_file(self, path: Path):
+        stat = path.stat()
+        etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.end_headers()
+            return
+
+        data = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", CONTENT_TYPES.get(path.suffix, "application/octet-stream"))
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("ETag", etag)
+        if path.suffix == ".json":
+            # icons.json in particular is large (~4.6MB) and effectively
+            # static, so it's worth avoiding a full re-download on every
+            # page load - but a blind time-based cache (the old
+            # max-age=3600 here) can serve a stale copy for up to an hour
+            # right after this file's format changes, breaking icon
+            # rendering until the browser is hard-refreshed. "no-cache"
+            # instead forces a conditional GET every time (cheap: a 304
+            # with no body when nothing changed) so a new version is
+            # always picked up immediately, on any device.
+            self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _read_json_body(self):
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        if length == 0:
+            return {}
+        raw = self.rfile.read(length)
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+
+    # -- GET ---------------------------------------------------------------
+
+    def do_GET(self):
+        parsed = urllib.parse.urlsplit(self.path)
+        route = parsed.path
+
+        if route == "/api/motd":
+            return self._send_json(get_motd())
+
+        if route == "/api/stats":
+            return self._send_json(get_stats_cached())
+
+        if route == "/api/config":
+            with _dashboard_lock:
+                return self._send_json(load_dashboard_config())
+
+        if route == "/":
+            route = "/index.html"
+
+        # static files - keep it inside STATIC_DIR
+        candidate = (STATIC_DIR / route.lstrip("/")).resolve()
+        if STATIC_DIR not in candidate.parents and candidate != STATIC_DIR:
+            self.send_error(403)
+            return
+        if candidate.is_file():
+            return self._send_file(candidate)
+
+        self.send_error(404)
+
+    # -- POST ----------------------------------------------------------
+
+    def do_POST(self):
+        route = urllib.parse.urlsplit(self.path).path
+        body = self._read_json_body()
+        if body is None:
+            return self._send_json({"error": "invalid JSON body"}, status=400)
+
+        if route == "/api/sections":
+            return self._create_section(body)
+        if route == "/api/services":
+            return self._create_service(body)
+        if route == "/api/reorder/sections":
+            return self._reorder_sections(body)
+        if route == "/api/reorder/services":
+            return self._reorder_services(body)
+
+        self.send_error(404)
+
+    # -- PATCH -----------------------------------------------------------
+
+    def do_PATCH(self):
+        route = urllib.parse.urlsplit(self.path).path
+        body = self._read_json_body()
+        if body is None:
+            return self._send_json({"error": "invalid JSON body"}, status=400)
+
+        m = SECTION_ID_RE.match(route)
+        if m:
+            return self._update_section(m.group(1), body)
+        m = SERVICE_ID_RE.match(route)
+        if m:
+            return self._update_service(m.group(1), body)
+
+        self.send_error(404)
+
+    # -- DELETE ----------------------------------------------------------
+
+    def do_DELETE(self):
+        route = urllib.parse.urlsplit(self.path).path
+
+        m = SECTION_ID_RE.match(route)
+        if m:
+            return self._delete_section(m.group(1))
+        m = SERVICE_ID_RE.match(route)
+        if m:
+            return self._delete_service(m.group(1))
+
+        self.send_error(404)
+
+    # -- CRUD implementations --------------------------------------------
+
+    def _create_section(self, body):
+        title = (body.get("title") or "").strip()
+        if not title:
+            return self._send_json({"error": "title is required"}, status=400)
+        icon = body.get("icon") or "folder"
+        position = body.get("position", "bottom")
+        with _dashboard_lock:
+            data = load_dashboard_config()
+            section = {"id": new_id("sec"), "title": title, "icon": icon, "active": bool(body.get("active", True)), "services": []}
+            if position == "top":
+                data["sections"].insert(0, section)
+            else:
+                data["sections"].append(section)
+            save_dashboard_config(data)
+        self._send_json(section, status=201)
+
+    def _update_section(self, section_id, body):
+        with _dashboard_lock:
+            data = load_dashboard_config()
+            section = find_section(data, section_id)
+            if not section:
+                return self._send_json({"error": "section not found"}, status=404)
+            if "title" in body and (body["title"] or "").strip():
+                section["title"] = body["title"].strip()
+            if "icon" in body and body["icon"]:
+                section["icon"] = body["icon"]
+            if "active" in body:
+                section["active"] = bool(body["active"])
+            save_dashboard_config(data)
+        self._send_json(section)
+
+    def _delete_section(self, section_id):
+        with _dashboard_lock:
+            data = load_dashboard_config()
+            section = find_section(data, section_id)
+            if not section:
+                return self._send_json({"error": "section not found"}, status=404)
+            data["sections"] = [s for s in data["sections"] if s["id"] != section_id]
+            save_dashboard_config(data)
+        self._send_json({"ok": True})
+
+    def _create_service(self, body):
+        name = (body.get("name") or "").strip()
+        if not name:
+            return self._send_json({"error": "name is required"}, status=400)
+        section_id = body.get("section_id")
+        with _dashboard_lock:
+            data = load_dashboard_config()
+            section = find_section(data, section_id) if section_id else None
+            if not section:
+                if data["sections"]:
+                    section = data["sections"][0]
+                else:
+                    return self._send_json({"error": "no section to add this service to - create a section first"}, status=400)
+            service = {
+                "id": new_id("svc"),
+                "name": name,
+                "url": (body.get("url") or "").strip(),
+                "icon": body.get("icon") or "apps",
+                "active": bool(body.get("active", True)),
+                "color": clean_color(body.get("color")),
+            }
+            section["services"].append(service)
+            save_dashboard_config(data)
+        self._send_json(service, status=201)
+
+    def _update_service(self, service_id, body):
+        with _dashboard_lock:
+            data = load_dashboard_config()
+            service, section = find_service(data, service_id)
+            if not service:
+                return self._send_json({"error": "service not found"}, status=404)
+            if "name" in body and (body["name"] or "").strip():
+                service["name"] = body["name"].strip()
+            if "url" in body:
+                service["url"] = (body["url"] or "").strip()
+            if "icon" in body and body["icon"]:
+                service["icon"] = body["icon"]
+            if "active" in body:
+                service["active"] = bool(body["active"])
+            if "color" in body:
+                service["color"] = clean_color(body["color"])
+            new_section_id = body.get("section_id")
+            if new_section_id and new_section_id != section["id"]:
+                target = find_section(data, new_section_id)
+                if not target:
+                    return self._send_json({"error": "target section not found"}, status=400)
+                section["services"] = [s for s in section["services"] if s["id"] != service_id]
+                target["services"].append(service)
+            save_dashboard_config(data)
+        self._send_json(service)
+
+    def _delete_service(self, service_id):
+        with _dashboard_lock:
+            data = load_dashboard_config()
+            service, section = find_service(data, service_id)
+            if not service:
+                return self._send_json({"error": "service not found"}, status=404)
+            section["services"] = [s for s in section["services"] if s["id"] != service_id]
+            save_dashboard_config(data)
+        self._send_json({"ok": True})
+
+    def _reorder_sections(self, body):
+        order = body.get("order") or []
+        with _dashboard_lock:
+            data = load_dashboard_config()
+            by_id = {s["id"]: s for s in data["sections"]}
+            new_list = [by_id[i] for i in order if i in by_id]
+            for s in data["sections"]:
+                if s["id"] not in order:
+                    new_list.append(s)
+            data["sections"] = new_list
+            save_dashboard_config(data)
+        self._send_json({"ok": True})
+
+    def _reorder_services(self, body):
+        section_id = body.get("section_id")
+        order = body.get("order") or []
+        with _dashboard_lock:
+            data = load_dashboard_config()
+            section = find_section(data, section_id)
+            if not section:
+                return self._send_json({"error": "section not found"}, status=404)
+            by_id = {s["id"]: s for s in section["services"]}
+            new_list = [by_id[i] for i in order if i in by_id]
+            for s in section["services"]:
+                if s["id"] not in order:
+                    new_list.append(s)
+            section["services"] = new_list
+            save_dashboard_config(data)
+        self._send_json({"ok": True})
+
+
+def main():
+    STATIC_DIR.mkdir(exist_ok=True)
+    httpd = ThreadingHTTPServer((HOST, PORT), Handler)
+    print(f"homelab dashboard serving on http://{HOST}:{PORT} (Ctrl+C to stop)")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
+
+
+if __name__ == "__main__":
+    main()
