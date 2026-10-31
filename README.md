@@ -1,7 +1,7 @@
 # Homelab Dashboard
 
 > [!NOTE]  
-> This project is made using AI tools.
+> This project was made using AI tools.
 
 A self-hosted dashboard for your homelab: live server stats (via
 [Beszel](https://github.com/henrygd/beszel)), a daily greeting, and a fully
